@@ -31,7 +31,9 @@ puzzles encoded against it.
 - `suite.js` — imports every puzzle and reports them in sequence.
 
 Each puzzle file is runnable standalone (`bun srat.js`); when imported,
-only the puzzle data is exposed.
+only the puzzle data is exposed. Each JS file has a Python sibling
+mirroring the same structure (`amb.py` ↔ `amb.js`, etc.); hyphens
+become underscores in Python so imports work (`srt_1.py`, `srat_henz.py`).
 
 ## How the solver works
 
@@ -77,15 +79,17 @@ range.
     bun srat.js           # one puzzle in isolation
     bun test              # the amb tests
 
-`suite.js` repeats each puzzle until its total runtime hits ~10s,
-anchored to SRAT, which takes about that long for a single solve;
-the rep count appears in parentheses when greater than one. Because
-wall time is pinned by design, the rep count is the speed signal:
-to compare optimizations, watch reps rise rather than times fall.
+The same with Python: replace `bun X.js` with `python X.py`, e.g.
+`python suite.py`, `python srat.py`, `python amb.test.py`.
+
+`suite.js` runs each puzzle a fixed number of times — counts
+calibrated so the total time per puzzle is roughly the same in
+JavaScript (~10s each). `suite.py` uses the same counts, so the
+two languages can be compared directly. Wall time is the speed
+signal: lower is faster.
 
 Output reports the puzzle name, solution count, wall time (seconds,
-one decimal), rep count when greater than one, and each solution as
-a sequence of letters.
+one decimal), rep count, and each solution as a sequence of letters.
 
 ## Implementing `amb`
 
