@@ -77,8 +77,15 @@ range.
     bun srat.js           # one puzzle in isolation
     bun test              # the amb tests
 
-Output reports the puzzle name, solution count, wall time, and each
-solution as a sequence of letters.
+`suite.js` repeats each puzzle until its total runtime hits ~10s,
+anchored to SRAT, which takes about that long for a single solve;
+the rep count appears in parentheses when greater than one. Because
+wall time is pinned by design, the rep count is the speed signal:
+to compare optimizations, watch reps rise rather than times fall.
+
+Output reports the puzzle name, solution count, wall time (seconds,
+one decimal), rep count when greater than one, and each solution as
+a sequence of letters.
 
 ## Implementing `amb`
 

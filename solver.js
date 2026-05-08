@@ -14,12 +14,12 @@ export const solve = ({ run }) => {
   return sols;
 };
 
+export const fmt = s => s.slice(1).map(v => "ABCDE"[v - 1]).join(" ");
+
 export const report = puzzle => {
   const t0 = performance.now();
   const sols = solve(puzzle);
-  const ms = (performance.now() - t0).toFixed(1);
-  console.log(`${puzzle.name}: ${sols.length} sol(s), ${ms}ms`);
-  for (const s of sols) {
-    console.log("  " + s.slice(1).map(v => "ABCDE"[v - 1]).join(" "));
-  }
+  const sec = ((performance.now() - t0) / 1000).toFixed(1);
+  console.log(`${puzzle.name}: ${sols.length} sol(s), ${sec}s`);
+  for (const s of sols) console.log("  " + fmt(s));
 };
