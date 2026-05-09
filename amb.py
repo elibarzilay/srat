@@ -1,52 +1,48 @@
-"""McCarthy's ambiguous operator, throw-and-replay implementation.
+"""Ambiguous operator via CPS, in the style of SICP §4.3.
 
-`amb_run(func)` calls `func(amb, fail)`:
-  amb(a, b, c)  non-deterministically picks one such that the
-                rest of the computation succeeds.
-  amb()         no arguments — synonym for fail().
-  fail()        rejects the current path; the driver backtracks.
-Returns whatever func returns on the first successful path, or
-None if the choice tree is exhausted.
+`amb(choices, k)` non-deterministically picks an element of `choices`
+and continues with `k(choice)`. If `k` returns `FAIL`, amb tries the
+next choice; otherwise it returns whatever `k` returned. `fail()`
+returns `FAIL`.
 
-Each backtrack re-runs func from the top, replaying the chosen
-indices recorded so far, so func must be pure of externally-
-visible side effects.
+Side effects between two amb calls fire exactly once per outer
+choice — no replay.
+
+`amb_run(func)` calls `func(amb, fail)` and returns the first
+successful result, or `None` if exhausted.
+`amb_all(func)` calls `func(amb, fail)` with an amb that collects
+every successful result; returns a list.
 """
 
+FAIL = object()
 
-class _Fail(Exception):
-    pass
+
+def _amb(choices, k):
+    for c in choices:
+        r = k(c)
+        if r is not FAIL:
+            return r
+    return FAIL
+
+
+def _fail():
+    return FAIL
 
 
 def amb_run(func):
-    choices = []
-    index = 0
+    r = func(_amb, _fail)
+    return None if r is FAIL else r
 
-    def amb(*values):
-        nonlocal index
-        if not values:
-            raise _Fail
-        if index == len(choices):
-            choices.append({"i": 0, "count": len(values)})
-        choice = choices[index]
-        index += 1
-        return values[choice["i"]]
 
-    def fail():
-        raise _Fail
+def amb_all(func):
+    sols = []
 
-    while True:
-        try:
-            index = 0
-            return func(amb, fail)
-        except _Fail:
-            choice = None
-            while choices:
-                c = choices.pop()
-                c["i"] += 1
-                if c["i"] != c["count"]:
-                    choice = c
-                    break
-            if choice is None:
-                return None
-            choices.append(choice)
+    def amb(choices, k):
+        for c in choices:
+            r = k(c)
+            if r is not FAIL:
+                sols.append(r)
+        return FAIL
+
+    func(amb, _fail)
+    return sols

@@ -1,18 +1,11 @@
-// amb-driven solver. Each puzzle is `{ name, run: (amb, fail) => q }`;
-// the run function uses amb/fail to non-deterministically build the
-// answer vector q. solve enumerates all solutions; report times and
-// prints them.
+// amb-driven solver. Each puzzle is `{ name, run }` where `run(amb,
+// fail)` is a CPS expression that returns each answer vector or
+// `fail()` for invalid ones. solve enumerates every solution; report
+// times and prints them.
 
-import { ambRun } from "./amb";
+import { ambAll } from "./amb";
 
-export const solve = ({ run }) => {
-  const sols = [];
-  ambRun((amb, fail) => {
-    sols.push(run(amb, fail));
-    fail();
-  });
-  return sols;
-};
+export const solve = ({ run }) => ambAll(run);
 
 export const fmt = s => s.slice(1).map(v => "ABCDE"[v - 1]).join(" ");
 

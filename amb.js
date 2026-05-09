@@ -1,39 +1,46 @@
-// McCarthy's ambiguous operator, throw-and-replay implementation.
+// Ambiguous operator via CPS, in the style of SICP §4.3.
 //
-// `ambRun(func)` calls `func(amb, fail)`:
-//   amb(a, b, c)  non-deterministically picks one such that the
-//                 rest of the computation succeeds.
-//   amb()         no arguments — synonym for fail().
-//   fail()        rejects the current path; the driver backtracks.
-// Returns whatever func returns on the first successful path, or
-// undefined if the choice tree is exhausted.
+// `amb(choices, k)` non-deterministically picks an element of `choices`
+// and continues with `k(choice)`. If `k` returns `FAIL`, amb tries the
+// next choice; otherwise it returns whatever `k` returned. `fail()`
+// returns `FAIL`.
 //
-// Each backtrack re-runs func from the top, replaying the chosen
-// indices recorded so far, so func must be pure of externally-
-// visible side effects.
+// Because each `k` is invoked per choice as a separate call, side
+// effects between two amb calls fire exactly once per outer choice —
+// no replay.
+//
+// `ambRun(func)` calls `func(amb, fail)` and returns the first
+// successful result, or `undefined` if exhausted.
+// `ambAll(func)` calls `func(amb, fail)` with an amb that collects
+// every successful result instead of returning the first; returns an
+// array.
+
+export const FAIL = Symbol("FAIL");
+
+const _amb = (choices, k) => {
+  for (const c of choices) {
+    const r = k(c);
+    if (r !== FAIL) return r;
+  }
+  return FAIL;
+};
+
+const _fail = () => FAIL;
 
 export const ambRun = func => {
-  const choices = [];
-  let index;
-  const FAIL = {};
-  const amb = (...values) => {
-    if (values.length === 0) throw FAIL;
-    if (index === choices.length) {
-      choices.push({ i: 0, count: values.length });
+  const r = func(_amb, _fail);
+  return r === FAIL ? undefined : r;
+};
+
+export const ambAll = func => {
+  const sols = [];
+  const amb = (choices, k) => {
+    for (const c of choices) {
+      const r = k(c);
+      if (r !== FAIL) sols.push(r);
     }
-    return values[choices[index++].i];
+    return FAIL;
   };
-  const fail = () => { throw FAIL; };
-  while (true) {
-    try {
-      index = 0;
-      return func(amb, fail);
-    } catch (e) {
-      if (e !== FAIL) throw e;
-      let choice;
-      while ((choice = choices.pop()) && ++choice.i === choice.count);
-      if (!choice) return undefined;
-      choices.push(choice);
-    }
-  }
+  func(amb, _fail);
+  return sols;
 };

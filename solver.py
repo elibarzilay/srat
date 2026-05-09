@@ -1,23 +1,16 @@
-"""amb-driven solver. Each puzzle is `{"name": ..., "run": (amb, fail) -> q}`;
-the run function uses amb/fail to non-deterministically build the
-answer vector q. solve enumerates all solutions; report times and
-prints them.
+"""amb-driven solver. Each puzzle is `{"name": ..., "run": (amb, fail) ->
+result}` where run is a CPS expression that returns each answer vector
+or `fail()` for invalid ones. solve enumerates every solution; report
+times and prints them.
 """
 
 import time
 
-from amb import amb_run
+from amb import amb_all
 
 
 def solve(puzzle):
-    sols = []
-
-    def collect(amb, fail):
-        sols.append(puzzle["run"](amb, fail))
-        fail()
-
-    amb_run(collect)
-    return sols
+    return amb_all(puzzle["run"])
 
 
 def fmt(s):

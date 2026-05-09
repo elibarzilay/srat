@@ -14,11 +14,13 @@ puzzles encoded against it.
 
 ## Files
 
-- `amb.js` — McCarthy's ambiguous operator. Throw-and-replay
-  implementation; exports `ambRun(func)`.
+- `amb.js` — `amb` as a CPS callback (in the style of SICP §4.3).
+  `amb(choices, k)` iterates choices, calling `k(c)`
+  per choice; if `k` returns `FAIL`, tries the next choice. Exports
+  `ambRun`, `ambAll`, `FAIL`.
 - `amb.test.js` — Bun-native test suite for `amb.js`.
 - `solver.js` — thin amb-driver. Each puzzle is `{ name, run }`;
-  `solve(puzzle)` enumerates all solutions via `ambRun`, and
+  `solve(puzzle)` enumerates all solutions via `ambAll`, and
   `report(puzzle)` prints them with timing.
 - `srat.js` — Jim Propp's S.R.A.T., 20Q × 5.
 - `srt-1.js` — Patrick Honner's Simple Self-Referential Test, 5Q × 4.
@@ -39,29 +41,40 @@ become underscores in Python so imports work (`srt_1.py`, `srat_henz.py`).
 
 Each puzzle exports `{ name, run }`:
 - `name` — display string.
-- `run(amb, fail)` — the puzzle as a function. It uses `amb(...vals)`
-  to non-deterministically pick a value and `fail()` to reject the
-  current path; backtracking finds another. On success it returns the
-  answer vector `q` (1-indexed; `q[0]` unused).
+- `run(amb, fail)` — the puzzle as a function that *returns* the
+  result of an `amb` chain. Each `amb(choices, k)` non-deterministically
+  picks a value from `choices` and continues with `k(value)`. If `k`
+  returns `FAIL`, amb tries the next choice; otherwise it returns
+  whatever `k` returned. `fail()` returns the `FAIL` sentinel.
 
-`solver.js` is a thin wrapper: it passes `(amb, fail)` to the puzzle's
-`run` via `ambRun`, pushes each successful return into a `sols` array,
-calls `fail()` to drive the search to the next solution, and returns
-all solutions when the choice tree is exhausted.
+`solver.js` is a thin wrapper: `solve(puzzle)` calls `ambAll(run)`,
+which runs `run` once with an `amb` that collects every successful
+result rather than returning the first.
 
 ### How a puzzle is encoded
 
-Each `run` body is straight-line Prolog-style: bind questions with
-`amb`, assert each constraint at the earliest binding point its
-referenced answers are all available, `fail()` if violated. Reading
-top-to-bottom is roughly the puzzle in English. For example, SRAT
-Q1 — "the first question whose answer is B is question N" — becomes:
+Each `run` body is a CPS pyramid: chained `amb([...], qN => ...)`
+calls binding each question, with checks placed at the binding point
+where their referenced answers are all in scope. Reading top-to-bottom
+is roughly the puzzle in English. For example, SRAT Q1 — "the first
+question whose answer is B is question N" — becomes:
 
-    if (q[q[1]] !== B) fail();
-    for (let i = 1; i < q[1]; i++) if (q[i] === B) fail();
+    if (q[q1] !== B) return fail();
+    if (q.slice(1, q1).includes(B)) return fail();
 
-placed right after `q[1..5]` are bound (the first five `amb` calls),
-since `q[1] ∈ {1..5}` so all referenced answers are in scope.
+placed inside the callback for `q5` (the fifth `amb`), with `q` built
+from the closed-over `q1..q5` values, since `q1 ∈ {1..5}` so all
+referenced answers are in scope.
+
+### Why the pyramid
+
+The CPS structure is the call/cc emulation: each `amb`'s callback `k`
+is invoked once per choice, so any side effects in `k`'s body fire
+once per outer choice — not once per leaf, which is what a
+throw-and-replay implementation would do. That's the property the
+`t.js` smoke test pins down: `console.log("x =", x)` between two
+`amb`s prints once for `x=1` and once for `x=2`, not three times for
+each.
 
 ### Why interleave constraints
 
@@ -69,125 +82,104 @@ A pure brute-force amb encoding (bind all 20 q's, then check
 everything) is 5²⁰ ≈ 10¹⁴ paths — infeasible for SRAT. Asserting each
 constraint at its natural binding point gives the search early
 termination, the same pruning a hand-rolled backtracker would have
-encoded explicitly. The smaller 10-question puzzles tolerate this less
-strictly but the same idiom keeps them in the millisecond-to-second
-range.
+encoded explicitly.
 
 ## Running
 
     bun suite.js          # the puzzle suite
     bun srat.js           # one puzzle in isolation
     bun test              # the amb tests
+    bun t.js              # the side-effect smoke test
 
 The same with Python: replace `bun X.js` with `python X.py`, e.g.
 `python suite.py`, `python srat.py`, `python amb.test.py`.
 
 `suite.js` runs each puzzle a fixed number of times — counts
 calibrated so the total time per puzzle is roughly the same in
-JavaScript (~10s each). `suite.py` uses the same counts, so the
-two languages can be compared directly. Wall time is the speed
-signal: lower is faster.
+JavaScript. `suite.py` uses the same counts, so the two languages
+can be compared directly. Wall time is the speed signal: lower is
+faster.
 
 Output reports the puzzle name, solution count, wall time (seconds,
 one decimal), rep count, and each solution as a sequence of letters.
 
 ## Implementing `amb`
 
-`amb` has several plausible implementations in JavaScript. The one in
-`amb.js` is approach 3 below (throw + replay). The others are
-documented here as design notes — `amb.js` is one file and roughly 25
-lines, easy to swap in a different impl if anything pushes back.
+`amb` is the [ambiguous operator from McCarthy's "A Basis for a
+Mathematical Theory of Computation" (1963)][mccarthy]; SICP §4.3
+implements it on top of Scheme's `call/cc`. JavaScript has no
+`call/cc`, so we need to emulate it. Several options, with very
+different consequences for side-effect behavior:
 
-1. **`call/cc` continuations** — the canonical Scheme/Ruby idiom.
-   Each `amb` captures the current continuation; `fail` invokes the
-   stored one to retry. JavaScript lacks `call/cc`, so this needs
-   simulation via async or a CPS transform — non-trivial.
+[mccarthy]: https://www.softwarepreservation.org/projects/LISP/MIT/AIM-031.pdf
 
-2. **CPS callback** (cf. `patrickdlogan/ambjs`):
-   `amb(choices, success, fail)`. The user passes "the rest of the
-   computation" as a callback. Every `amb` deepens callback nesting,
-   so the puzzle bodies become a pyramid.
+1. **CPS callback** (the current `amb.js`, cf. SICP §4.3).
+   `amb(choices, k)` iterates choices, calling `k(c)` for each. The
+   user's `run` is a chain of `amb([...], qN => ...)` calls, each one
+   nesting inside the previous. The callback `k` is invoked once per
+   outer choice, so side effects between two `amb`s fire once per
+   outer-choice value — exactly call/cc semantics for this purpose.
+   The cost is structural: the puzzle body is a pyramid. For SRAT's
+   20 questions we factor it into a few `at_N` helper functions to
+   keep individual lambdas short, but the shape is unavoidable.
 
-3. **Throw + replay** (Rosetta Code's "Procedural" JavaScript). The
+2. **Throw + replay** (Rosetta Code's "Procedural" JavaScript). The
    driver records each `amb` call's chosen index in a stack; `fail()`
    throws a sentinel, the driver catches it, increments the deepest
-   index, and re-runs the user function from the top. `amb` is
-   positional — the Nth call reads the Nth slot — so reruns are
-   deterministic. Puzzle bodies read as straight-line code with `amb()`
-   and `fail()` calls inline. The driver is ~25 lines. The replay
-   cost per backtrack is linear in the current path depth. The
-   constraint: the user function must be pure of externally-visible
-   side effects (it's re-run on every backtrack).
+   index, and re-runs the user function from the top. The user can
+   write straight-line code with `const x = amb(...)` instead of a
+   pyramid — but every backtrack re-runs the prefix, so a
+   `console.log` between two `amb`s prints once per leaf in the search
+   subtree, not once per outer choice. Same bug as `t.js`'s previous
+   `x = 1` × 3.
 
-4. **Generators** (`function*` + `yield`). Each `amb` becomes
-   `yield amb(choices)`; the driver iterates the generator and
-   manages backtracking. No replay is needed — actual continuations
-   are captured in the generator's state, so the user function may
-   have arbitrary side effects. Bodies need `yield` on every `amb`
-   and `fail`, but otherwise look the same as approach 3.
+3. **Generators** (`function*` + `yield amb(...)`). The user code is
+   flat-with-yield, but the driver still has to recreate the
+   generator and replay choices on backtrack — JS generators are
+   single-shot, no clone, no rewind. Same side-effect behavior as
+   approach 2.
 
-5. **Trampoline** (cf. ambjs's alternate impl). A CPS variant using
-   thunks to keep the stack bounded; same callback pyramid as
-   approach 2 plus trampoline plumbing.
+4. **Iterator generators** (`for (const x of amb(...))`). `amb` is a
+   generator that yields each choice; the user iterates with
+   `for...of`. Single forward pass, no replay, side effects correct.
+   But `amb` becomes a one-line `yield* values` and the user loses
+   the `=` binding shape.
 
-The aim is for puzzle bodies to read as a faithful, easy-to-follow
-encoding of the English questions. Approaches 3 and 4 deliver the
-cleanest bodies; the rest impose nesting that obscures the
-constraints. Between 3 and 4 the bodies look the same modulo `yield`
-decoration, so the tiebreaker is driver simplicity — 3 wins.
+5. **`call/cc` itself**, simulated via a Babel-style CPS transform.
+   Lets the user write `const x = amb(...)` and have call/cc
+   semantics. Requires build tooling.
+
+CPS (#1) is the only plain-JS way to keep `amb` substantive *and*
+get correct side-effect behavior. The pyramid is the price; structure
+helpers (`at_N` functions per check level) keep it readable.
 
 ## Testing `amb`
 
 `amb.test.js` is a Bun-native test suite (`bun test`) with two
 halves:
 
-- **Examples** (5 tests) illustrate what `amb` is for: an `x·y = 8`
+- **Examples** (4 tests) illustrate what `amb` is for: an `x·y = 8`
   factorization, the Rosetta four-word chain, a Pythagorean triple
-  in `{1..6}`, SICP §4.3.2's Baker/Cooper/Fletcher/Miller/Smith
-  floor puzzle, and the first 7 Pythagorean triples enumerated via
-  lazy integer streams.
-- **Implementation** (12 tests) covers the operator's behavior: no
-  amb calls, `amb()` as a synonym for `fail`, top-level `fail()`,
-  single amb, backtracking through to a satisfying value,
-  no-solution paths, exception passthrough, leftmost-first DFS
-  order, conditional branches with different amb counts, amb in a
-  loop, deep nesting, and the throw-and-replay's side-effect caveat.
+  in `{1..6}`, and SICP §4.3.2's Baker/Cooper/Fletcher/Miller/Smith
+  floor puzzle.
+- **Implementation** (10 tests) covers the operator's behavior: no
+  amb calls, top-level `fail()` / `FAIL`, empty-choice amb, single
+  amb, backtracking through to a satisfying value, no-solution
+  paths, exception passthrough, leftmost-first DFS order, `ambAll`
+  enumeration, and the no-replay side-effect property — once per
+  outer choice, not once per leaf.
 
-### `collect` and the `?:` trick
+`amb.test.py` mirrors the same tests in Python; either `pytest
+amb.test.py` or `python amb.test.py` runs them (the file's
+`__main__` block runs each `test_*` function and prints a
+pass/fail summary, so pytest isn't required).
 
-The streams example uses two patterns worth pulling out.
+`t.js` (and the Python equivalent could be added) is a deliberately
+tiny smoke test: a single `amb` chain with `console.log` between
+two `amb`s, asserted by hand to print the outer choices once each.
+It's the property that motivated the CPS choice; running it should
+emit:
 
-`collect(n, func)` gathers up to `n` solutions. Classical `amb`
-returns one; to enumerate further you must `fail()` after each
-success to force the search to keep going:
-
-    const collect = (n, func) => {
-      const sols = [];
-      ambRun((amb, fail) => {
-        const v = func(amb, fail);
-        sols.push(v);
-        if (sols.length < n) fail();
-        return v;
-      });
-      return sols;
-    };
-
-`solver.js` uses essentially the same pattern, with `n = ∞`.
-
-The `?:` trick handles laziness. Scheme's `(amb a b)` doesn't
-evaluate `b` until backtracking demands it, so
-
-    (define (integers-from n)
-      (amb n (integers-from (add1 n))))
-
-recurses safely. Our `amb` is a regular varargs JS function — both
-arguments would evaluate eagerly. Express the binary choice through
-a JS ternary instead, whose arms are naturally lazy:
-
-    const integersFrom = (amb, n) =>
-      amb("here", "next") === "here" ? n : integersFrom(amb, n + 1);
-
-`amb` makes the binary choice; the ternary picks which arm to
-evaluate. The recursive call only happens when backtracking selects
-`"next"`, which is what restores the laziness Scheme gets from
-`call/cc`.
+    x = 1
+    x = 2
+    [ 2, 4 ]
